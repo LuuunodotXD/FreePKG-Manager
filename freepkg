@@ -1,0 +1,396 @@
+#!/bin/sh
+set -e
+
+# ─── configuração ────────────────────────────────────────────────────────────
+CONF_DIR="/etc/freepkg"
+CONF_FILE="$CONF_DIR/freepkg.conf"
+
+if [ ! -f "$CONF_FILE" ]; then
+    mkdir -p "$CONF_DIR"
+    cat > "$CONF_FILE" <<'EOF'
+# freepkg configuration file
+
+# URL base do repositório de packages
+REPO="https://raw.githubusercontent.com/LuuunodotXD/FreeRoot-Packages/main/packages"
+
+# URL do índice
+REPO_INDEX="https://raw.githubusercontent.com/LuuunodotXD/FreeRoot-Packages/main/db/amd64.index"
+
+# downloader para packages: curl ou wget (padrão: curl)
+DOWNLOADER="curl"
+EOF
+fi
+
+. "$CONF_FILE"
+
+ARCH="amd64"
+PKG_DB="/var/lib/freepkg/installed"
+PKG_CACHE="/var/cache/freepkg"
+LOCAL_INDEX="/var/lib/freepkg/amd64.index"
+
+mkdir -p "$PKG_DB" "$PKG_CACHE"
+
+# ─── helpers de versão ───────────────────────────────────────────────────────
+# PKG_DB: name=version|build_date|bin
+
+get_installed_ver() {
+    cat "$PKG_DB/$1" 2>/dev/null | cut -d= -f2 | cut -d'|' -f1
+}
+
+get_installed_date() {
+    d=$(cat "$PKG_DB/$1" 2>/dev/null | cut -d'|' -f2)
+    [ -z "$d" ] && echo "0" || echo "$d"
+}
+
+compare_dates() {
+    a=$(echo "$1" | tr -d '/')
+    b=$(echo "$2" | tr -d '/')
+    [ -z "$a" ] && a=0
+    [ -z "$b" ] && b=0
+    if [ "$a" -gt "$b" ]; then echo "newer"
+    elif [ "$a" -eq "$b" ]; then echo "same"
+    else echo "older"
+    fi
+}
+
+is_installed() {
+    [ -f "$PKG_DB/$1" ]
+}
+
+# ─── busca info da package no índice local ───────────────────────────────────
+# amd64.index: name|version|build_date|desc|deps
+pkg_info() {
+    grep "^$1|" "$LOCAL_INDEX" 2>/dev/null || true
+}
+
+pkg_version() {
+    pkg_info "$1" | cut -d'|' -f2
+}
+
+pkg_date() {
+    pkg_info "$1" | cut -d'|' -f3
+}
+
+pkg_desc() {
+    pkg_info "$1" | cut -d'|' -f4
+}
+
+pkg_deps() {
+    pkg_info "$1" | cut -d'|' -f5
+}
+
+# monta URL do tarball: REPO/name/amd64/name-version.tar.gz
+pkg_url() {
+    echo "$REPO/$1/$ARCH/$1-$(pkg_version "$1").tar.gz"
+}
+
+# monta URL do md5: REPO/name/amd64/md5
+pkg_md5_url() {
+    echo "$REPO/$1/$ARCH/md5"
+}
+
+# ─── verifica se db local existe ─────────────────────────────────────────────
+require_index() {
+    if [ ! -f "$LOCAL_INDEX" ]; then
+        echo "==> No local database found. Running update first..."
+        update_db
+    fi
+}
+
+# ─── download ────────────────────────────────────────────────────────────────
+download_pkg() {
+    url="$1"
+    dest="$2"
+
+    case "$DOWNLOADER" in
+        wget)
+            wget -O "$dest" "$url"
+            ;;
+        *)
+            curl -L -# -o "$dest" "$url"
+            ;;
+    esac
+}
+
+# ─── install ─────────────────────────────────────────────────────────────────
+install_pkg() {
+    ask=0
+    pkgname=""
+
+    for arg in "$@"; do
+        case "$arg" in
+            --ask|-a) ask=1 ;;
+            "")       continue ;;
+            *)        pkgname="$arg" ;;
+        esac
+    done
+
+    [ -z "$pkgname" ] && {
+        echo "Use: freepkg install [-a|--ask] <package>"
+        exit 1
+    }
+
+    require_index
+
+    if is_installed "$pkgname"; then
+        echo "==> $pkgname is already installed."
+        return 0
+    fi
+
+    entry=$(pkg_info "$pkgname")
+    [ -z "$entry" ] && {
+        echo "ERROR: package '$pkgname' not found in database."
+        exit 1
+    }
+
+    version=$(pkg_version "$pkgname")
+    desc=$(pkg_desc "$pkgname")
+    deps=$(pkg_deps "$pkgname")
+    url=$(pkg_url "$pkgname")
+
+    size=$(curl -sI "$url" | grep -i content-length | awk '{print $2}' | tr -d '\r')
+    if [ -n "$size" ] && [ "$size" -gt 0 ] 2>/dev/null; then
+        size_str=$(awk "BEGIN {printf \"%.2f MiB\", $size/1048576}")
+    else
+        size_str="unknown"
+    fi
+
+    echo ""
+    echo "  Package : $pkgname-$version"
+    echo "  Desc    : $desc"
+    [ -n "$deps" ] && echo "  Deps    : $deps"
+    echo "  Size    : $size_str"
+    echo ""
+
+    if [ "$ask" = "1" ]; then
+        printf "==> Proceed? [Y/n] "
+        read -r answer
+        case "$answer" in
+            n|N) echo "==> Aborted."; exit 0 ;;
+        esac
+    fi
+
+    for dep in $deps; do
+        is_installed "$dep" || install_pkg "$dep"
+    done
+
+    # usa pkgname salvo antes do loop — não é sobrescrito pois não sourcea PKGINFO
+    echo "==> Downloading $pkgname-$version...  Do not turn off target!"
+    download_pkg "$(pkg_url "$pkgname")" "$PKG_CACHE/$pkgname-$version.tar.gz"
+
+    echo "==> Verifying checksum..."
+    expected_md5=$(curl -fsSL "$(pkg_md5_url "$pkgname")" | tr -d '[:space:]')
+    actual_md5=$(md5sum "$PKG_CACHE/$pkgname-$version.tar.gz" | cut -d' ' -f1)
+    if [ "$expected_md5" != "$actual_md5" ]; then
+        echo "ERROR: MD5 mismatch. Aborting."
+        exit 1
+    fi
+    echo "  OK"
+
+    echo "==> Installing $pkgname-$version..."
+    tar -xzf "$PKG_CACHE/$pkgname-$version.tar.gz" -C /
+    tar -tzf "$PKG_CACHE/$pkgname-$version.tar.gz" > "$PKG_DB/$pkgname.files"
+
+    _bdate=$(pkg_date "$pkgname")
+    [ -z "$_bdate" ] && _bdate="0"
+    echo "$pkgname=$version|$_bdate|bin" > "$PKG_DB/$pkgname"
+    echo "==> $pkgname-$version installed sucessfully."
+}
+
+# ─── remove ──────────────────────────────────────────────────────────────────
+remove_pkg() {
+    force=0
+    pkgname=""
+
+    for arg in "$@"; do
+        case "$arg" in
+            --force|-f) force=1 ;;
+            "")         continue ;;
+            *)          pkgname="$arg" ;;
+        esac
+    done
+
+    [ -z "$pkgname" ] && {
+        echo "Use: freepkg remove [-f|--force] <package>"
+        exit 1
+    }
+
+    if ! is_installed "$pkgname"; then
+        if [ "$force" = "1" ]; then
+            echo "==> WARNING: $pkgname not in database, forcing removal..."
+        else
+            echo "==> $pkgname is not installed. Use --force to remove anyway."
+            exit 1
+        fi
+    fi
+
+    # checa dependências reversas
+    if is_installed "$pkgname"; then
+        deps_on=""
+        for pkg in $(ls "$PKG_DB/" | grep -v "\.files$"); do
+            pname=$(cat "$PKG_DB/$pkg" | cut -d= -f1)
+            pdeps=$(pkg_deps "$pname")
+            for dep in $pdeps; do
+                [ "$dep" = "$pkgname" ] && deps_on="$deps_on $pname"
+            done
+        done
+
+        if [ -n "$deps_on" ]; then
+            echo "==> ERROR: cannot remove '$pkgname', required by:$deps_on"
+            exit 1
+        fi
+    fi
+
+    echo "==> Removing $pkgname..."
+    if [ -f "$PKG_DB/$pkgname.files" ]; then
+        while read -r file; do
+            case "$file" in */) continue ;; esac
+            rm -f "/$file"
+        done < "$PKG_DB/$pkgname.files"
+        rm -f "$PKG_DB/$pkgname.files"
+    else
+        echo "==> WARNING: no file manifest found, only removing from database."
+    fi
+
+    rm -f "$PKG_DB/$pkgname"
+    echo "==> $pkgname removed sucessfully."
+}
+
+# ─── update ──────────────────────────────────────────────────────────────────
+update_db() {
+    echo "==> Syncing package database..."
+    curl -fsSL "$REPO_INDEX" -o "$LOCAL_INDEX" || {
+        echo "ERROR: could not fetch package index."
+        exit 1
+    }
+    count=$(grep -vc "^#" "$LOCAL_INDEX" 2>/dev/null || echo 0)
+    echo "==> Database synced. $count packages available."
+}
+
+# ─── search ──────────────────────────────────────────────────────────────────
+search_pkg() {
+    require_index
+
+    if [ -z "$1" ]; then
+        grep -v "^#" "$LOCAL_INDEX" | while IFS="|" read -r name version bdate desc deps; do
+            if is_installed "$name"; then
+                echo "  $name ($version) - $desc [installed]"
+            else
+                echo "  $name ($version) - $desc"
+            fi
+        done
+    else
+        result=$(grep -i "^$1|" "$LOCAL_INDEX" 2>/dev/null || true)
+        if [ -z "$result" ]; then
+            echo "==> No packages found for '$1'."
+        else
+            echo "$result" | while IFS="|" read -r name version bdate desc deps; do
+                echo "  $name ($version) - $desc"
+                [ -n "$deps" ] && echo "  deps: $deps"
+                is_installed "$name" && echo "  [installed]"
+            done
+        fi
+    fi
+}
+
+# ─── upgrade ─────────────────────────────────────────────────────────────────
+upgrade_pkg() {
+    pkgname=""
+
+    for arg in "$@"; do
+        case "$arg" in
+            "") continue ;;
+            *)  pkgname="$arg" ;;
+        esac
+    done
+
+    require_index
+
+    if [ -n "$pkgname" ]; then
+        upgrade_one "$pkgname"
+    else
+        ls "$PKG_DB/" | grep -v "\.files$" | while read -r pkg; do
+            pname=$(cat "$PKG_DB/$pkg" | cut -d= -f1)
+            upgrade_one "$pname"
+        done
+    fi
+}
+
+upgrade_one() {
+    pkgname="$1"
+
+    is_installed "$pkgname" || { echo "==> $pkgname is not installed."; return 1; }
+
+    installed_ver=$(get_installed_ver "$pkgname")
+    installed_date=$(get_installed_date "$pkgname")
+
+    entry=$(pkg_info "$pkgname")
+    if [ -z "$entry" ]; then
+        echo "==> $pkgname: not found in repository, skipping."
+        return 0
+    fi
+
+    repo_ver=$(pkg_version "$pkgname")
+    repo_date=$(pkg_date "$pkgname")
+    [ -z "$repo_date" ] && repo_date="0"
+
+    cmp=$(compare_dates "$repo_date" "$installed_date")
+    if [ "$cmp" = "newer" ]; then
+        echo "==> Upgrading $pkgname: $installed_ver -> $repo_ver..."
+        if [ -f "$PKG_DB/$pkgname.files" ]; then
+            while read -r file; do
+                case "$file" in */) continue ;; esac
+                rm -f "/$file"
+            done < "$PKG_DB/$pkgname.files"
+            rm -f "$PKG_DB/$pkgname.files"
+        fi
+        rm -f "$PKG_DB/$pkgname"
+        rm -f "$PKG_CACHE/$pkgname-"*.tar.gz
+        install_pkg "$pkgname"
+    else
+        echo "==> $pkgname: already up to date ($installed_ver)."
+    fi
+}
+
+# ─── list ────────────────────────────────────────────────────────────────────
+list_installed() {
+    echo "==> Installed packages:"
+    ls "$PKG_DB/" 2>/dev/null | while read -r pkg; do
+        case "$pkg" in *.files) continue ;; esac
+        entry=$(cat "$PKG_DB/$pkg")
+        name=$(echo "$entry"  | cut -d= -f1)
+        ver=$(echo "$entry"   | cut -d= -f2 | cut -d'|' -f1)
+        bdate=$(echo "$entry" | cut -d'|' -f2)
+        if [ -z "$bdate" ] || [ "$bdate" = "0" ]; then
+            echo "  $name=$ver"
+        else
+            echo "  $name=$ver ($bdate)"
+        fi
+    done
+}
+
+# ─── main ────────────────────────────────────────────────────────────────────
+case "$1" in
+    install) install_pkg "$2" "$3" ;;
+    remove)  remove_pkg  "$2" "$3" ;;
+    list)    list_installed ;;
+    search)  search_pkg  "$2" ;;
+    update)  update_db ;;
+    upgrade) upgrade_pkg "$2" ;;
+    *)
+        echo "freepkg basic - package manager"
+        echo "made by luuunoxd, version a0.39_9"
+        echo ""
+        echo "Usage: freepkg <command> [options] <package>"
+        echo ""
+        echo "Commands:"
+        echo "  install [-a|--ask] <pkg>    install a package"
+        echo "  remove  [-f|--force] <pkg>  remove a package"
+        echo "  list                         list installed packages"
+        echo "  search  [pkg]                search available packages"
+        echo "  update                        sync local package database"
+        echo "  upgrade [pkg]                upgrade one or all packages"
+        echo ""
+        echo "Config: $CONF_FILE"
+        ;;
+esac
