@@ -11,10 +11,10 @@ if [ ! -f "$CONF_FILE" ]; then
 # freepkg configuration file
 
 # URL base do repositório de packages
-REPO="https://raw.githubusercontent.com/LuuunodotXD/FreePKG-Repo/main/packages"
+REPO="https://raw.githubusercontent.com/LuuunodotXD/FreeRoot-Packages/main/packages"
 
 # URL do índice
-REPO_INDEX="https://raw.githubusercontent.com/LuuunodotXD/FreePKG-Repo/main/db/amd64.index"
+REPO_INDEX="https://raw.githubusercontent.com/LuuunodotXD/FreeRoot-Packages/main/db/amd64.index"
 
 # downloader para packages: curl ou wget (padrão: curl)
 DOWNLOADER="curl"
@@ -170,9 +170,15 @@ install_pkg() {
         esac
     fi
 
+    _saved_pkgname="$pkgname"
+
     for dep in $deps; do
         is_installed "$dep" || install_pkg "$dep"
     done
+
+    pkgname="$_saved_pkgname"
+    version=$(pkg_version "$pkgname")
+    url=$(pkg_url "$pkgname")
 
     # usa pkgname salvo antes do loop — não é sobrescrito pois não sourcea PKGINFO
     echo "==> Downloading $pkgname-$version...  Do not turn off target!"
