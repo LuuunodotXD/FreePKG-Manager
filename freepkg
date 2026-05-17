@@ -34,7 +34,9 @@ mkdir -p "$PKG_DB" "$PKG_CACHE"
 # PKG_DB: name=version|build_date|bin
 
 get_installed_ver() {
-    cat "$PKG_DB/$1" 2>/dev/null | cut -d= -f2 | cut -d'|' -f1
+    entry=$(/usr/lib/freepkg-core get-installed "$1")
+    entry=${entry#*=}
+    echo "${entry%%|*}"
 }
 
 get_installed_date() {
@@ -43,24 +45,17 @@ get_installed_date() {
 }
 
 compare_dates() {
-    a=$(echo "$1" | tr -d '/')
-    b=$(echo "$2" | tr -d '/')
-    [ -z "$a" ] && a=0
-    [ -z "$b" ] && b=0
-    if [ "$a" -gt "$b" ]; then echo "newer"
-    elif [ "$a" -eq "$b" ]; then echo "same"
-    else echo "older"
-    fi
+    /usr/lib/freepkg-core compare-date "$1" "$2"
 }
 
 is_installed() {
-    [ -f "$PKG_DB/$1" ]
+    /usr/lib/freepkg-core installed "$1"
 }
 
 # ─── busca info da package no índice local ───────────────────────────────────
 # amd64.index: name|version|build_date|desc|deps
 pkg_info() {
-    grep "^$1|" "$LOCAL_INDEX" 2>/dev/null || true
+    /usr/lib/freepkg-core info "$1"
 }
 
 pkg_version() {
