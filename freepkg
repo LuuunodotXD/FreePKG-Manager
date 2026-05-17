@@ -130,23 +130,16 @@ install_pkg() {
         exit 1
     }
 
-    require_index
+    _show_and_ask "$pkgname" "$ask"
+    _install_build "$pkgname"
+}
 
-    if is_installed "$pkgname"; then
-        echo "==> $pkgname is already installed."
-        return 0
-    fi
-
-    entry=$(pkg_info "$pkgname")
-    [ -z "$entry" ] && {
-        echo "ERROR: package '$pkgname' not found in database."
-        exit 1
-    }
-
-    version=$(pkg_version "$pkgname")
-    desc=$(pkg_desc "$pkgname")
-    deps=$(pkg_deps "$pkgname")
-    url=$(pkg_url "$pkgname")
+_show_and_ask() {
+    entry=$(pkg_info "$1")
+    version=$(pkg_version "$1")
+    desc=$(pkg_desc "$1")
+    deps=$(pkg_deps "$1")
+    url=$(pkg_url "$1")
 
     size=$(curl -sI "$url" | grep -i content-length | awk '{print $2}' | tr -d '\r')
     if [ -n "$size" ] && [ "$size" -gt 0 ] 2>/dev/null; then
@@ -156,51 +149,58 @@ install_pkg() {
     fi
 
     echo ""
-    echo "  Package : $pkgname-$version"
+    echo "  Package : $1-$version"
     echo "  Desc    : $desc"
     [ -n "$deps" ] && echo "  Deps    : $deps"
     echo "  Size    : $size_str"
     echo ""
 
-    if [ "$ask" = "1" ]; then
+    if [ "$2" = "1" ]; then
         printf "==> Proceed? [Y/n] "
         read -r answer
         case "$answer" in
             n|N) echo "==> Aborted."; exit 0 ;;
         esac
     fi
+}
 
-    _saved_pkgname="$pkgname"
+_install_build() {
+    if is_installed "$1"; then
+        echo "==> $1 is already installed."
+        return 0
+    fi
 
-    for dep in $deps; do
-        is_installed "$dep" || install_pkg "$dep"
+    entry=$(pkg_info "$1")
+    [ -z "$entry" ] && {
+        echo "ERROR: package '$1' not found in database."
+        exit 1
+    }
+
+    for dep in $(pkg_deps "$1"); do
+        is_installed "$dep" || _install_build "$dep"
     done
 
-    pkgname="$_saved_pkgname"
-    version=$(pkg_version "$pkgname")
-    url=$(pkg_url "$pkgname")
-
-    # usa pkgname salvo antes do loop — não é sobrescrito pois não sourcea PKGINFO
-    echo "==> Downloading $pkgname-$version...  Do not turn off target!"
-    download_pkg "$(pkg_url "$pkgname")" "$PKG_CACHE/$pkgname-$version.tar.gz"
+    # $1 nunca é sobrescrito pela recursão
+    echo "==> Downloading $1-$(pkg_version "$1")...  Do not turn off target!"
+    download_pkg "$(pkg_url "$1")" "$PKG_CACHE/$1-$(pkg_version "$1").tar.gz"
 
     echo "==> Verifying checksum..."
-    expected_md5=$(curl -fsSL "$(pkg_md5_url "$pkgname")" | tr -d '[:space:]')
-    actual_md5=$(md5sum "$PKG_CACHE/$pkgname-$version.tar.gz" | cut -d' ' -f1)
+    expected_md5=$(curl -fsSL "$(pkg_md5_url "$1")" | tr -d '[:space:]')
+    actual_md5=$(md5sum "$PKG_CACHE/$1-$(pkg_version "$1").tar.gz" | cut -d' ' -f1)
     if [ "$expected_md5" != "$actual_md5" ]; then
         echo "ERROR: MD5 mismatch. Aborting."
         exit 1
     fi
     echo "  OK"
 
-    echo "==> Installing $pkgname-$version..."
-    tar -xzf "$PKG_CACHE/$pkgname-$version.tar.gz" -C /
-    tar -tzf "$PKG_CACHE/$pkgname-$version.tar.gz" > "$PKG_DB/$pkgname.files"
+    echo "==> Installing $1-$(pkg_version "$1")..."
+    tar -xzf "$PKG_CACHE/$1-$(pkg_version "$1").tar.gz" -C /
+    tar -tzf "$PKG_CACHE/$1-$(pkg_version "$1").tar.gz" > "$PKG_DB/$1.files"
 
-    _bdate=$(pkg_date "$pkgname")
+    _bdate=$(pkg_date "$1")
     [ -z "$_bdate" ] && _bdate="0"
-    echo "$pkgname=$version|$_bdate|bin" > "$PKG_DB/$pkgname"
-    echo "==> $pkgname-$version installed sucessfully."
+    echo "$1=$(pkg_version "$1")|$_bdate|bin" > "$PKG_DB/$1"
+    echo "==> $1-$(pkg_version "$1") installed sucessfully."
 }
 
 # ─── remove ──────────────────────────────────────────────────────────────────
