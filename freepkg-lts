@@ -11,10 +11,10 @@ if [ ! -f "$CONF_FILE" ]; then
 # freepkg configuration file
 
 # URL base do repositório de packages
-REPO="https://raw.githubusercontent.com/LuuunodotXD/FreePKG-Repo/main/packages"
+REPO="https://cdn.jsdelivr.net/gh/LuuunodotXD/FreePKG-Repo@main/packages"
 
 # URL do índice
-REPO_INDEX="https://raw.githubusercontent.com/LuuunodotXD/FreePKG-Repo/main/db/amd64.index"
+REPO_INDEX="https://cdn.jsdelivr.net/gh/LuuunodotXD/FreePKG-Repo@main/db/amd64.index"
 
 # downloader para packages: curl ou wget (padrão: curl)
 DOWNLOADER="curl"
