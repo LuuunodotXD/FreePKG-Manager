@@ -31,8 +31,7 @@ LOCAL_INDEX="/var/lib/freepkg/amd64.index"
 mkdir -p "$PKG_DB" "$PKG_CACHE"
 
 # ─── lock ─────────────────────────────────────────────────────────────────────
-LOCK="/var/lock/freepkg.lock"
-LOCK_DIR="/var/lock/freepkg"
+LOCK_DIR="/var/lock/freepkg.lock"
 
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "ERROR: freepkg is already running." >&2
