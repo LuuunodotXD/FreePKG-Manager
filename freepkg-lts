@@ -30,6 +30,11 @@ LOCAL_INDEX="/var/lib/freepkg/amd64.index"
 
 mkdir -p "$PKG_DB" "$PKG_CACHE"
 
+# ─── lock ─────────────────────────────────────────────────────────────────────
+LOCK="/var/lock/freepkg.lock"
+exec 9>"$LOCK"
+flock -n 9 || { echo "ERROR: freepkg is already running."; exit 1; }
+
 # ─── helpers de versão ───────────────────────────────────────────────────────
 # PKG_DB: name=version|build_date|bin
 
@@ -200,7 +205,8 @@ _install_build() {
     _bdate=$(pkg_date "$1")
     [ -z "$_bdate" ] && _bdate="0"
     echo "$1=$(pkg_version "$1")|$_bdate|bin" > "$PKG_DB/$1"
-    echo "==> $1-$(pkg_version "$1") installed sucessfully."
+    pkg_deps "$1" > "$PKG_DB/$1.deps"
+    echo "==> $1-$(pkg_version "$1") installed successfully."
 }
 
 # ─── remove ──────────────────────────────────────────────────────────────────
@@ -233,12 +239,13 @@ remove_pkg() {
     # checa dependências reversas
     if is_installed "$pkgname"; then
         deps_on=""
-        for pkg in $(ls "$PKG_DB/" | grep -v "\.files$"); do
-            pname=$(cat "$PKG_DB/$pkg" | cut -d= -f1)
-            pdeps=$(pkg_deps "$pname")
-            for dep in $pdeps; do
-                [ "$dep" = "$pkgname" ] && deps_on="$deps_on $pname"
-            done
+        for depfile in "$PKG_DB/"*.deps; do
+            [ -f "$depfile" ] || continue
+            pname=$(basename "$depfile" .deps)
+            [ "$pname" = "$pkgname" ] && continue
+            if grep -qw "$pkgname" "$depfile" 2>/dev/null; then
+                deps_on="$deps_on $pname"
+            fi
         done
 
         if [ -n "$deps_on" ]; then
@@ -259,7 +266,7 @@ remove_pkg() {
     fi
 
     rm -f "$PKG_DB/$pkgname"
-    echo "==> $pkgname removed sucessfully."
+    echo "==> $pkgname removed successfully."
 }
 
 # ─── update ──────────────────────────────────────────────────────────────────
@@ -315,9 +322,9 @@ upgrade_pkg() {
     if [ -n "$pkgname" ]; then
         upgrade_one "$pkgname"
     else
-        ls "$PKG_DB/" | grep -v "\.files$" | while read -r pkg; do
+        ls "$PKG_DB/" | grep -v "\.files$" | grep -v "\.deps$" | while read -r pkg; do
             pname=$(cat "$PKG_DB/$pkg" | cut -d= -f1)
-            upgrade_one "$pname"
+            upgrade_one "$pname" || true
         done
     fi
 }
@@ -350,9 +357,9 @@ upgrade_one() {
             done < "$PKG_DB/$pkgname.files"
             rm -f "$PKG_DB/$pkgname.files"
         fi
-        rm -f "$PKG_DB/$pkgname"
+        rm -f "$PKG_DB/$pkgname" "$PKG_DB/$pkgname.deps"
         rm -f "$PKG_CACHE/$pkgname-"*.tar.gz
-        install_pkg "$pkgname"
+        _install_build "$pkgname"
     else
         echo "==> $pkgname: already up to date ($installed_ver)."
     fi
@@ -362,7 +369,7 @@ upgrade_one() {
 list_installed() {
     echo "==> Installed packages:"
     ls "$PKG_DB/" 2>/dev/null | while read -r pkg; do
-        case "$pkg" in *.files) continue ;; esac
+        case "$pkg" in *.files|*.deps) continue ;; esac
         entry=$(cat "$PKG_DB/$pkg")
         name=$(echo "$entry"  | cut -d= -f1)
         ver=$(echo "$entry"   | cut -d= -f2 | cut -d'|' -f1)
