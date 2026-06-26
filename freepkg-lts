@@ -31,9 +31,10 @@ LOCAL_INDEX="/var/lib/freepkg/amd64.index"
 mkdir -p "$PKG_DB" "$PKG_CACHE"
 
 # ─── lock ─────────────────────────────────────────────────────────────────────
-LOCK="/var/lock/freepkg.lock"
-exec 9>"$LOCK"
-flock -n 9 || { echo "ERROR: freepkg is already running."; exit 1; }
+# LOCK="/var/lock/freepkg.lock"
+# exec 9>"$LOCK"
+# flock -n 9 || { echo "ERROR: freepkg is already running."; exit 1; }
+# sem flock no momento por conta da compatibilidade.
 
 # ─── helpers de versão ───────────────────────────────────────────────────────
 # PKG_DB: name=version|build_date|bin
