@@ -31,14 +31,20 @@ LOCAL_INDEX="/var/lib/freepkg/amd64.index"
 mkdir -p "$PKG_DB" "$PKG_CACHE"
 
 # ─── lock ─────────────────────────────────────────────────────────────────────
-LOCK_DIR="/var/lock/freepkg.lock"
+PIDFILE="/var/run/freepkg.pid"
 
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "ERROR: freepkg is already running." >&2
-    exit 1
+if [ -f "$PIDFILE" ]; then
+    PID=$(cat "$PIDFILE")
+    if kill -0 "$PID" 2>/dev/null; then
+        echo "ERROR: freepkg is already running (PID $PID)." >&2
+        exit 1
+    else
+        rm -f "$PIDFILE"
+    fi
 fi
 
-trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM HUP
+echo $$ > "$PIDFILE"
+trap 'rm -f "$PIDFILE"' EXIT INT TERM HUP
 
 # ─── helpers de versão ───────────────────────────────────────────────────────
 # PKG_DB: name=version|build_date|bin
