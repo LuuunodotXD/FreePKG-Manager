@@ -403,7 +403,7 @@ case "$1" in
     upgrade) upgrade_pkg "$2" ;;
     *)
         echo "freepkg basic - package manager"
-        echo "made by luuunoxd, version a0.40_9"
+        echo "made by luuunoxd, version a0.41_10"
         echo ""
         echo "Usage: freepkg <command> [options] <package>"
         echo ""
